@@ -1,10 +1,13 @@
-from fastapi import FastAPI, HTTPException, status
-from pydantic import BaseModel, Field, EmailStr
-from typing import List, Optional, Dict, Any
-import firebase_admin
-from firebase_admin import credentials, firestore
-from google.cloud.firestore import Query, FieldFilter
 import datetime
+from typing import List, Optional
+
+from fastapi import FastAPI, HTTPException, status, Response, Depends, Header
+from pydantic import BaseModel, Field, EmailStr
+import firebase_admin
+from firebase_admin import credentials, firestore, auth
+from google.cloud.firestore import DELETE_FIELD
+
+
 
 app = FastAPI(
     title = "Barely Used Bytes",
@@ -22,8 +25,36 @@ try:
 except Exception as e:
     print(f"Error initializing Firebase Firestore: {e}")
     db = None
+
+async def get_current_user(authorization: str = Header(...)):
+    """
+    Dependency to verify Firebase ID token from the Authorization header.
+    Returns the decoded token payload which includes user info.
+    """
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication scheme.",
+        )
     
+    token = authorization.split("Bearer ")[1]
     
+    try:
+        # Verify the token against the Firebase project
+        decoded_token = auth.verify_id_token(token)
+        return decoded_token
+    except auth.InvalidIdTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Firebase ID token.",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred: {e}",
+        )
+        
+        
 class Location(BaseModel):
     city: str
     country: str
@@ -71,10 +102,10 @@ class ProductUpdate(BaseModel):
 
 
 class Product(ProductBase):
-    productId: None
-    postedAt: None
-    updatedAt: None
-    views: None
+    productId: str
+    postedAt: datetime.datetime
+    updatedAt: datetime.datetime
+    views: int
      
      
 # --- Pydantic Models for User Data ---
@@ -217,7 +248,7 @@ async def read_root():
     if db: 
         return {"message": "Welcome to Barely Used Bytes API!"}
     else:
-        return {"message: Database not found :("}
+        return {"message": "Database not found :("}
     
     
 """ Product Enpoints """
@@ -279,12 +310,16 @@ async def get_product_by_id(product_id: str):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error fetching product: {e}")
 
 @app.post("/products", response_model=Product, status_code=status.HTTP_201_CREATED, summary="Create a new product")
-async def create_product(product: ProductCreate):
+async def create_product(product: ProductCreate, current_user: dict = Depends(get_current_user)):
     """
     Creates a new product listing in the Firestore 'products' collection.
     """
     if db is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Firestore database not initialized.")
+    
+    if product.sellerId != current_user['uid']:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Seller ID must match authenticated user.")
+
     products_ref = db.collection('products')
     try:
         # Prepare data for Firestore
@@ -300,7 +335,7 @@ async def create_product(product: ProductCreate):
         update_time, doc_ref = products_ref.add(product_data) 
 
       
-        new_product_doc = doc_ref.get() 
+        new_product_doc = doc_ref.get()
         new_product_data = new_product_doc.to_dict()
         new_product_data['productId'] = new_product_doc.id
         
@@ -315,7 +350,7 @@ async def create_product(product: ProductCreate):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error creating product: {e}")
 
 @app.put("/products/{product_id}", response_model=Product, summary="Update an existing product")
-async def update_product(product_id: str, product_update: ProductUpdate):
+async def update_product(product_id: str, product_update: ProductUpdate, current_user: dict = Depends(get_current_user)):
     """
     Updates an existing product listing in the Firestore 'products' collection.
     Only provided fields will be updated.
@@ -328,6 +363,10 @@ async def update_product(product_id: str, product_update: ProductUpdate):
         if not doc.exists:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
         
+        product_data = doc.to_dict()
+        if product_data.get('sellerId') != current_user['uid']:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to update this product.")
+
         # Get only the fields that were provided in the request body
         update_data = product_update.model_dump(exclude_unset=True) # Exclude fields not set in the request
         
@@ -357,7 +396,7 @@ async def update_product(product_id: str, product_update: ProductUpdate):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error updating product: {e}")
 
 @app.delete("/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a product")
-async def delete_product(product_id: str):
+async def delete_product(product_id: str, current_user: dict = Depends(get_current_user)):
     """
     Deletes a product listing from the Firestore 'products' collection.
     """
@@ -369,8 +408,12 @@ async def delete_product(product_id: str):
         if not doc.exists:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
         
+        product_data = doc.to_dict()
+        if product_data.get('sellerId') != current_user['uid']:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to delete this product.")
+
         product_ref.delete() # Synchronous delete
-        return {"message": "Product deleted successfully"} # No content for 204
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -378,9 +421,11 @@ async def delete_product(product_id: str):
     
     
 @app.get("/users", response_model=List[User], summary="Get all users")
-async def get_all_users():
+async def get_all_users(current_user: dict = Depends(get_current_user)):
     """
     Retrieves a list of all user profiles from the Firestore 'users' collection.
+    NOTE: This endpoint is protected and requires authentication. 
+    In a real-world application, this should be restricted to admin users.
     """
     if db is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Firestore database not initialized.")
@@ -403,12 +448,17 @@ async def get_all_users():
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error fetching users: {e}")
 
 @app.get("/users/{user_id}", response_model=User, summary="Get a user by ID")
-async def get_user_by_id(user_id: str):
+async def get_user_by_id(user_id: str, current_user: dict = Depends(get_current_user)):
     """
     Retrieves a single user profile by their unique ID from the Firestore 'users' collection.
+    A user can only retrieve their own profile.
     """
     if db is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Firestore database not initialized.")
+    
+    if user_id != current_user['uid']:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only retrieve your own profile.")
+
     user_ref = db.collection('users').document(user_id)
     try:
         doc = user_ref.get()
@@ -429,27 +479,31 @@ async def get_user_by_id(user_id: str):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error fetching user: {e}")
 
 @app.post("/users", response_model=User, status_code=status.HTTP_201_CREATED, summary="Create a new user")
-async def create_user(user: UserCreate):
+async def create_user(user: UserCreate, current_user: dict = Depends(get_current_user)):
     """
     Creates a new user profile in the Firestore 'users' collection.
-    Note: In a real app, userId might come from Firebase Auth after user registration.
-    For this example, Firestore will generate a new ID.
+    The document ID is the Firebase UID of the authenticated user.
+    This should be called once after a user signs up via Firebase Authentication.
     """
     if db is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Firestore database not initialized.")
-    users_ref = db.collection('users')
+    
+    user_id = current_user['uid']
+    user_ref = db.collection('users').document(user_id)
+
     try:
+        if user_ref.get().exists:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"User profile for UID {user_id} already exists.")
+
         user_data = user.model_dump()
         now = datetime.datetime.now(datetime.timezone.utc)
 
         user_data['createdAt'] = now
-        user_data['lastLoginAt'] = now # Set last login to creation time initially
+        user_data['lastLoginAt'] = now
 
-        # Add the document to Firestore, letting Firestore generate the ID
-        update_time, doc_ref = users_ref.add(user_data) 
+        user_ref.set(user_data)
 
-        # Retrieve the newly created document to return the full User model
-        new_user_doc = doc_ref.get() 
+        new_user_doc = user_ref.get()
         new_user_data = new_user_doc.to_dict()
         new_user_data['userId'] = new_user_doc.id
         
@@ -459,17 +513,23 @@ async def create_user(user: UserCreate):
             new_user_data['lastLoginAt'] = new_user_data['lastLoginAt'].isoformat()
 
         return User(**new_user_data)
+    except HTTPException as e:
+        raise e
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error creating user: {e}")
 
 @app.put("/users/{user_id}", response_model=User, summary="Update an existing user")
-async def update_user(user_id: str, user_update: UserUpdate):
+async def update_user(user_id: str, user_update: UserUpdate, current_user: dict = Depends(get_current_user)):
     """
     Updates an existing user profile in the Firestore 'users' collection.
-    Only provided fields will be updated.
+    Only provided fields will be updated. A user can only update their own profile.
     """
     if db is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Firestore database not initialized.")
+    
+    if user_id != current_user['uid']:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only update your own profile.")
+
     user_ref = db.collection('users').document(user_id)
     try:
         doc = user_ref.get()
@@ -481,17 +541,10 @@ async def update_user(user_id: str, user_update: UserUpdate):
         if not update_data:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update")
 
-        # Do not update createdAt or userId on update
         if 'createdAt' in update_data:
             del update_data['createdAt']
         if 'userId' in update_data:
             del update_data['userId']
-
-        # Update lastLoginAt if it's explicitly provided, otherwise it's not a general update.
-        # This is a design choice; you might want to update it only on actual login events.
-        # For a general profile update, we'll just update the 'updatedAt' (if we had one for users)
-        # or rely on the client to send 'lastLoginAt' if it's meant to be updated.
-        # For now, we'll assume lastLoginAt is only updated on login, not general profile update.
 
         user_ref.update(update_data)
 
@@ -511,13 +564,18 @@ async def update_user(user_id: str, user_update: UserUpdate):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error updating user: {e}")
 
 @app.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a user")
-async def delete_user(user_id: str):
+async def delete_user(user_id: str, current_user: dict = Depends(get_current_user)):
     """
     Deletes a user profile from the Firestore 'users' collection.
     Note: In a real app, you'd also want to delete the user from Firebase Authentication.
+    A user can only delete their own profile.
     """
     if db is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Firestore database not initialized.")
+    
+    if user_id != current_user['uid']:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only delete your own profile.")
+
     user_ref = db.collection('users').document(user_id)
     try:
         doc = user_ref.get()
@@ -525,43 +583,62 @@ async def delete_user(user_id: str):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
         
         user_ref.delete()
-        return {"message": "User deleted successfully"}
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except HTTPException as e:
         raise e
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error deleting user: {e}")
 
-@app.get("/orders", response_model=List[Order], summary="Get all orders")
-async def get_all_orders():
+@app.get("/orders", response_model=List[Order], summary="Get all orders for the current user")
+async def get_orders(current_user: dict = Depends(get_current_user)):
     """
-    Retrieves a list of all orders from the Firestore 'orders' collection.
+    Retrieves a list of all orders from the Firestore 'orders' collection 
+    where the current user is either the buyer or the seller.
     """
     if db is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Firestore database not initialized.")
-    orders_ref = db.collection('orders')
+    
+    user_id = current_user['uid']
+    orders_dict = {}
+
     try:
-        docs = orders_ref.stream()
-        orders = []
-        for doc in docs:
+        # Query for orders where the user is the buyer
+        buyer_query = db.collection('orders').where('buyerId', '==', user_id).stream()
+        for doc in buyer_query:
             order_data = doc.to_dict()
-            # Convert Firestore Timestamps to datetime objects for Pydantic
             if 'orderedAt' in order_data and hasattr(order_data['orderedAt'], 'isoformat'):
                 order_data['orderedAt'] = order_data['orderedAt'].isoformat()
             if 'shippedAt' in order_data and hasattr(order_data['shippedAt'], 'isoformat'):
                 order_data['shippedAt'] = order_data['shippedAt'].isoformat()
             if 'deliveredAt' in order_data and hasattr(order_data['deliveredAt'], 'isoformat'):
                 order_data['deliveredAt'] = order_data['deliveredAt'].isoformat()
-            
-            order_data['orderId'] = doc.id # Ensure orderId is included from the document ID
-            orders.append(Order(**order_data))
-        return orders
+            order_data['orderId'] = doc.id
+            orders_dict[doc.id] = Order(**order_data)
+
+        # Query for orders where the user is the seller
+        seller_query = db.collection('orders').where('sellerId', '==', user_id).stream()
+        for doc in seller_query:
+            if doc.id not in orders_dict: # Avoid duplicates
+                order_data = doc.to_dict()
+                if 'orderedAt' in order_data and hasattr(order_data['orderedAt'], 'isoformat'):
+                    order_data['orderedAt'] = order_data['orderedAt'].isoformat()
+                if 'shippedAt' in order_data and hasattr(order_data['shippedAt'], 'isoformat'):
+                    order_data['shippedAt'] = order_data['shippedAt'].isoformat()
+                if 'deliveredAt' in order_data and hasattr(order_data['deliveredAt'], 'isoformat'):
+                    order_data['deliveredAt'] = order_data['deliveredAt'].isoformat()
+                order_data['orderId'] = doc.id
+                orders_dict[doc.id] = Order(**order_data)
+
+        return list(orders_dict.values())
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error fetching orders: {e}")
 
+
 @app.get("/orders/{order_id}", response_model=Order, summary="Get an order by ID")
-async def get_order_by_id(order_id: str):
+async def get_order_by_id(order_id: str, current_user: dict = Depends(get_current_user)):
     """
-    Retrieves a single order by its unique ID from the Firestore 'orders' collection.
+    Retrieves a single order by its unique ID.
+    A user can only retrieve an order if they are the buyer or the seller.
     """
     if db is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Firestore database not initialized.")
@@ -572,6 +649,10 @@ async def get_order_by_id(order_id: str):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
         
         order_data = doc.to_dict()
+        
+        if order_data.get('buyerId') != current_user['uid'] and order_data.get('sellerId') != current_user['uid']:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to view this order.")
+
         if 'orderedAt' in order_data and hasattr(order_data['orderedAt'], 'isoformat'):
             order_data['orderedAt'] = order_data['orderedAt'].isoformat()
         if 'shippedAt' in order_data and hasattr(order_data['shippedAt'], 'isoformat'):
@@ -587,12 +668,17 @@ async def get_order_by_id(order_id: str):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error fetching order: {e}")
 
 @app.post("/orders", response_model=Order, status_code=status.HTTP_201_CREATED, summary="Create a new order")
-async def create_order(order: OrderCreate):
+async def create_order(order: OrderCreate, current_user: dict = Depends(get_current_user)):
     """
     Creates a new order in the Firestore 'orders' collection.
+    The buyerId must match the authenticated user.
     """
     if db is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Firestore database not initialized.")
+    
+    if order.buyerId != current_user['uid']:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Buyer ID must match authenticated user.")
+
     orders_ref = db.collection('orders')
     try:
         order_data = order.model_dump()
@@ -619,10 +705,9 @@ async def create_order(order: OrderCreate):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error creating order: {e}")
 
 @app.put("/orders/{order_id}", response_model=Order, summary="Update an existing order")
-async def update_order(order_id: str, order_update: OrderUpdate):
+async def update_order(order_id: str, order_update: OrderUpdate, current_user: dict = Depends(get_current_user)):
     """
-    Updates an existing order in the Firestore 'orders' collection.
-    Only provided fields will be updated.
+    Updates an existing order. Only the buyer or seller can update it.
     """
     if db is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Firestore database not initialized.")
@@ -632,6 +717,10 @@ async def update_order(order_id: str, order_update: OrderUpdate):
         if not doc.exists:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
         
+        order_data = doc.to_dict()
+        if order_data.get('buyerId') != current_user['uid'] and order_data.get('sellerId') != current_user['uid']:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to update this order.")
+
         update_data = order_update.model_dump(exclude_unset=True)
         
         if not update_data:
@@ -639,12 +728,12 @@ async def update_order(order_id: str, order_update: OrderUpdate):
 
         # Handle specific timestamp updates if they are provided
         if 'shippedAt' in update_data and update_data['shippedAt'] is None: # Allow setting to null
-            update_data['shippedAt'] = firestore.DELETE_FIELD
+            update_data['shippedAt'] = DELETE_FIELD
         elif 'shippedAt' in update_data and isinstance(update_data['shippedAt'], str):
             update_data['shippedAt'] = datetime.datetime.fromisoformat(update_data['shippedAt'].replace('Z', '+00:00'))
 
         if 'deliveredAt' in update_data and update_data['deliveredAt'] is None: # Allow setting to null
-            update_data['deliveredAt'] = firestore.DELETE_FIELD
+            update_data['deliveredAt'] = DELETE_FIELD
         elif 'deliveredAt' in update_data and isinstance(update_data['deliveredAt'], str):
             update_data['deliveredAt'] = datetime.datetime.fromisoformat(update_data['deliveredAt'].replace('Z', '+00:00'))
         
@@ -668,9 +757,9 @@ async def update_order(order_id: str, order_update: OrderUpdate):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error updating order: {e}")
 
 @app.delete("/orders/{order_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete an order")
-async def delete_order(order_id: str):
+async def delete_order(order_id: str, current_user: dict = Depends(get_current_user)):
     """
-    Deletes an order from the Firestore 'orders' collection.
+    Deletes an order. Only the buyer or seller can delete it.
     """
     if db is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Firestore database not initialized.")
@@ -680,8 +769,12 @@ async def delete_order(order_id: str):
         if not doc.exists:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
         
+        order_data = doc.to_dict()
+        if order_data.get('buyerId') != current_user['uid'] and order_data.get('sellerId') != current_user['uid']:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to delete this order.")
+
         order_ref.delete()
-        return {"message": "Order deleted successfully"}
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -736,12 +829,17 @@ async def get_review_by_id(review_id: str):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error fetching review: {e}")
 
 @app.post("/reviews", response_model=Review, status_code=status.HTTP_201_CREATED, summary="Create a new review")
-async def create_review(review: ReviewCreate):
+async def create_review(review: ReviewCreate, current_user: dict = Depends(get_current_user)):
     """
     Creates a new review in the Firestore 'reviews' collection.
+    The reviewerId must match the authenticated user.
     """
     if db is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Firestore database not initialized.")
+    
+    if review.reviewerId != current_user['uid']:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Reviewer ID must match authenticated user.")
+
     reviews_ref = db.collection('reviews')
     try:
         review_data = review.model_dump()
@@ -763,10 +861,9 @@ async def create_review(review: ReviewCreate):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error creating review: {e}")
 
 @app.put("/reviews/{review_id}", response_model=Review, summary="Update an existing review")
-async def update_review(review_id: str, review_update: ReviewUpdate):
+async def update_review(review_id: str, review_update: ReviewUpdate, current_user: dict = Depends(get_current_user)):
     """
-    Updates an existing review in the Firestore 'reviews' collection.
-    Only provided fields will be updated.
+    Updates an existing review. Only the original reviewer can update it.
     """
     if db is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Firestore database not initialized.")
@@ -776,13 +873,14 @@ async def update_review(review_id: str, review_update: ReviewUpdate):
         if not doc.exists:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
         
+        review_data = doc.to_dict()
+        if review_data.get('reviewerId') != current_user['uid']:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to update this review.")
+
         update_data = review_update.model_dump(exclude_unset=True)
         
         if not update_data:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update")
-
-        # Do not update reviewedAt on update, only on creation
-        # Review IDs and names should also not be updated
         
         review_ref.update(update_data)
 
@@ -800,9 +898,9 @@ async def update_review(review_id: str, review_update: ReviewUpdate):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error updating review: {e}")
 
 @app.delete("/reviews/{review_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a review")
-async def delete_review(review_id: str):
+async def delete_review(review_id: str, current_user: dict = Depends(get_current_user)):
     """
-    Deletes a review from the Firestore 'reviews' collection.
+    Deletes a review. Only the original reviewer can delete it.
     """
     if db is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Firestore database not initialized.")
@@ -812,8 +910,12 @@ async def delete_review(review_id: str):
         if not doc.exists:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
         
+        review_data = doc.to_dict()
+        if review_data.get('reviewerId') != current_user['uid']:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to delete this review.")
+
         review_ref.delete()
-        return {"message": "Review deleted successfully"}
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except HTTPException as e:
         raise e
     except Exception as e:
