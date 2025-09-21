@@ -1,4 +1,4 @@
-[
+export const products = [
   {
     name: "High-End Gaming CPU",
     price: "$250",
