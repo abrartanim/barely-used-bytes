@@ -62,7 +62,7 @@ export default function Sidebar() {
 
       {/* Sidebar */}
       <aside
-        className={`bg-[#182625] text-white w-64 h-screen p-6 flex flex-col
+        className={` text-white w-64 h-screen p-6 flex flex-col
                    fixed top-0 left-0 z-50
                    transform transition-transform duration-300 ease-in-out
                    ${isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"}

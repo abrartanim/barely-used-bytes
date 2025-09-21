@@ -4,7 +4,7 @@ import { FaSearch, FaRegHeart, FaShoppingCart } from "react-icons/fa";
 export default function NavBar() {
   return (
     <div>
-      <nav className="flex items-center justify-between bg-[#1a2e2e] px-8 py-4">
+      <nav className="flex items-center justify-between px-8 py-4">
         <div className="flex items-center ">
           <div className="relative">
             <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
