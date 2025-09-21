@@ -78,10 +78,12 @@ export default function Sidebar() {
         </button>
 
         {/* Logo and Title Section */}
-        <div className="flex items-center gap-3 mb-12 mt-8 md:mt-0">
-          <IoHardwareChipOutline className="text-3xl text-[#38d49c]" />
-          <h1 className="font-bold text-xl">Barely Used Bytes</h1>
-        </div>
+        <Link href="/">
+          <div className="flex items-center gap-3 mb-12 mt-8 md:mt-0 cursor-pointer">
+            <IoHardwareChipOutline className="text-3xl text-[#38d49c]" />
+            <h1 className="font-bold text-xl">Barely Used Bytes</h1>
+          </div>
+        </Link>
 
         {/* Navigation Section */}
         <nav className="flex flex-col">
