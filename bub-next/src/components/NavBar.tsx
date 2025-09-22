@@ -37,7 +37,7 @@ export default function NavBar() {
           </button>
 
           <img
-            src="https://i.pravatar.cc/40"
+            src="https://i.pravatar.cc/120"
             alt="User Avatar"
             className="h-10 w-10 rounded-full object-cover"
           />

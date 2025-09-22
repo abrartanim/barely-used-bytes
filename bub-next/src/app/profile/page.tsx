@@ -1,4 +1,5 @@
 import { products } from "../../components/pages/mockData";
+import { FiChevronLeft, FiChevronRight } from "react-icons/fi";
 
 const UserProfilePage = () => {
   // Use the first 4 products from the mock data
@@ -12,7 +13,7 @@ const UserProfilePage = () => {
           <div className="flex flex-col gap-6 sm:flex-row sm:justify-between sm:items-center">
             <div className="flex items-center gap-6">
               <img
-                src="https://i.pravatar.cc/128" // Increased size for better visibility
+                src="https://i.pravatar.cc/120" // Increased size for better visibility
                 alt="User Avatar"
                 className="h-24 w-24 sm:h-32 sm:w-32 flex-shrink-0 rounded-full object-cover border-2 border-stone-700"
               />
@@ -67,7 +68,7 @@ const UserProfilePage = () => {
                   <img
                     src={product.imageUrl}
                     alt={product.name}
-                    className="h-full w-full object-cover object-center group-hover:opacity-75 transition-opacity"
+                    className="h-full w-full object-cover object-center group-hover:opacity-75 group-hover:scale-105 transition-all duration-300"
                   />
                 </div>
                 <h3 className="mt-4 text-sm font-bold text-white">
@@ -84,7 +85,7 @@ const UserProfilePage = () => {
           </div>
 
           {/* Pagination */}
-          <nav
+          {/* <nav
             aria-label="Pagination"
             className="mt-8 flex items-center justify-center gap-2"
           >
@@ -92,18 +93,11 @@ const UserProfilePage = () => {
               href="#"
               className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-stone-500 hover:bg-stone-800"
             >
-              {/* Previous Page Icon */}
-              <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                <path
-                  fillRule="evenodd"
-                  d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z"
-                  clipRule="evenodd"
-                />
-              </svg>
+              <FiChevronLeft className="h-5 w-5" />
             </a>
             <a
               href="#"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[#239BA7] text-white text-sm font-bold"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[#1dcddd] text-white text-sm font-bold"
             >
               1
             </a>
@@ -123,16 +117,9 @@ const UserProfilePage = () => {
               href="#"
               className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-stone-500 hover:bg-stone-800"
             >
-              {/* Next Page Icon */}
-              <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                <path
-                  fillRule="evenodd"
-                  d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z"
-                  clipRule="evenodd"
-                />
-              </svg>
+              <FiChevronRight className="h-5 w-5" />
             </a>
-          </nav>
+          </nav> */}
         </div>
       </div>
     </main>
