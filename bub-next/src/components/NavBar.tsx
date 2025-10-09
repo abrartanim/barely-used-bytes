@@ -1,5 +1,6 @@
 import React from "react";
 import { FaSearch, FaRegHeart, FaShoppingCart } from "react-icons/fa";
+import Link from "next/link";
 
 export default function NavBar() {
   return (
@@ -17,12 +18,12 @@ export default function NavBar() {
         </div>
 
         <div className="flex items-center gap-x-6">
-          <a href="#" className=" text-gray-300 hover:text-white">
+          <Link href="/products" className=" text-gray-300 hover:text-white">
             Browse
-          </a>
-          <a href="#" className=" text-gray-300 hover:text-white">
+          </Link>
+          <Link href="/createListing" className=" text-gray-300 hover:text-white">
             Sell
-          </a>
+          </Link>
           <button
             type="button"
             className=" text-gray-300 hover:text-white cursor-pointer"
@@ -35,12 +36,13 @@ export default function NavBar() {
           >
             <FaShoppingCart size={22}></FaShoppingCart>
           </button>
-
-          <img
-            src="https://i.pravatar.cc/120"
-            alt="User Avatar"
-            className="h-10 w-10 rounded-full object-cover"
-          />
+          <Link href="/profile">
+            <img
+              src="https://i.pravatar.cc/120"
+              alt="User Avatar"
+              className="h-10 w-10 rounded-full object-cover"
+            />
+          </Link>
         </div>
       </nav>
     </div>
