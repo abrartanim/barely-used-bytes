@@ -1,20 +1,18 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { FiUploadCloud, FiX, FiCheck } from "react-icons/fi";
-import { useAuth } from "../lib/AuthContext";
-import { createProduct } from "../lib/api";
-import {
-  CATEGORIES,
-  CONDITIONS,
-  CURRENCIES,
-  ProductCreate,
-} from "../lib/types";
+import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
+import { FiX, FiCheck, FiArrowLeft, FiTrash2 } from "react-icons/fi";
+import { useAuth } from "@/app/lib/AuthContext";
+import { getProductById, updateProduct, deleteProduct } from "@/app/lib/api";
+import { Product, CATEGORIES, CONDITIONS, CURRENCIES } from "@/app/lib/types";
 
-const CreateListingPage = () => {
+export default function EditProductPage() {
+  const params = useParams();
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
+  const productId = params.slug as string;
 
   // Form state
   const [name, setName] = useState("");
@@ -34,15 +32,65 @@ const CreateListingPage = () => {
   ]);
   const [images, setImages] = useState<string[]>([]);
   const [imageUrl, setImageUrl] = useState("");
+  const [status, setStatus] = useState("available");
 
   // UI state
+  const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   // Get subcategories based on selected category
   const selectedCategoryData = CATEGORIES.find((c) => c.slug === category);
   const subcategories = selectedCategoryData?.subcategories || [];
+
+  // Fetch product data
+  useEffect(() => {
+    const fetchProduct = async () => {
+      try {
+        setLoading(true);
+        const product = await getProductById(productId);
+
+        // Check ownership
+        if (user && product.sellerId !== user.uid) {
+          setError("You don't have permission to edit this listing.");
+          return;
+        }
+
+        // Populate form
+        setName(product.name);
+        // Find the category slug from the name
+        const catData = CATEGORIES.find(
+          (c) => c.name.toLowerCase() === product.category.toLowerCase()
+        );
+        setCategory(catData?.slug || "");
+        setSubcategory(product.subcategory);
+        setDescription(product.description);
+        setPrice(product.price.toString());
+        setCurrency(product.currency);
+        setCondition(product.condition);
+        setSpecifications(product.specifications || "");
+        setYearsUsed(product.yearsUsed.toString());
+        setNegotiable(product.negotiable);
+        setCity(product.location.city);
+        setCountry(product.location.country);
+        setShippingOptions(product.shippingOptions);
+        setImages(product.images);
+        setStatus(product.status);
+      } catch (err) {
+        console.error("Error fetching product:", err);
+        setError("Failed to load product. Please try again.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (user) {
+      fetchProduct();
+    }
+  }, [productId, user]);
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -81,25 +129,17 @@ const CreateListingPage = () => {
     setError(null);
 
     if (!user) {
-      setError("You must be logged in to create a listing.");
+      setError("You must be logged in to edit a listing.");
       return;
     }
 
     // Validation
-    if (!name.trim()) {
-      setError("Product name is required.");
-      return;
-    }
-    if (name.trim().length < 3) {
+    if (!name.trim() || name.trim().length < 3) {
       setError("Product name must be at least 3 characters.");
       return;
     }
-    if (!category) {
-      setError("Please select a category.");
-      return;
-    }
-    if (!subcategory) {
-      setError("Please select a subcategory.");
+    if (!category || !subcategory) {
+      setError("Please select a category and subcategory.");
       return;
     }
     if (!description.trim() || description.trim().length < 10) {
@@ -126,7 +166,7 @@ const CreateListingPage = () => {
     try {
       setIsSubmitting(true);
 
-      const productData: ProductCreate = {
+      await updateProduct(productId, {
         name: name.trim(),
         category: selectedCategoryData?.name || category,
         subcategory,
@@ -135,39 +175,48 @@ const CreateListingPage = () => {
         currency,
         condition,
         images,
-        sellerId: user.uid,
-        sellerName: user.displayName || "Anonymous",
         location: {
           city: city.trim(),
           country,
         },
-        status: "available",
+        status,
         specifications: specifications.trim(),
         yearsUsed: parseInt(yearsUsed) || 0,
         negotiable,
         shippingOptions,
-      };
+      });
 
-      const createdProduct = await createProduct(productData);
       setSuccess(true);
 
-      // Redirect to the product page after a short delay
       setTimeout(() => {
-        router.push(`/products/${createdProduct.productId}`);
+        router.push(`/products/${productId}`);
       }, 1500);
     } catch (err) {
-      console.error("Error creating listing:", err);
+      console.error("Error updating listing:", err);
       if (err instanceof Error) {
         setError(err.message);
       } else {
-        setError("Failed to create listing. Please try again.");
+        setError("Failed to update listing. Please try again.");
       }
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  if (authLoading) {
+  // Handle delete
+  const handleDelete = async () => {
+    try {
+      setIsDeleting(true);
+      await deleteProduct(productId);
+      router.push("/profile");
+    } catch (err) {
+      console.error("Error deleting product:", err);
+      setError("Failed to delete listing. Please try again.");
+      setIsDeleting(false);
+    }
+  };
+
+  if (authLoading || loading) {
     return (
       <main className="container mx-auto px-4 py-12 text-[#ECECBB]">
         <div className="text-center">Loading...</div>
@@ -179,15 +228,31 @@ const CreateListingPage = () => {
     return null;
   }
 
+  if (error && !name) {
+    return (
+      <main className="container mx-auto px-4 py-12 text-[#ECECBB]">
+        <div className="max-w-3xl mx-auto text-center">
+          <div className="bg-red-500/20 border border-red-500 rounded-lg p-8">
+            <h1 className="text-2xl font-bold mb-2 text-red-400">{error}</h1>
+            <Link
+              href="/products"
+              className="inline-flex items-center gap-2 text-[#239BA7] hover:underline mt-4"
+            >
+              <FiArrowLeft /> Back to Products
+            </Link>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   if (success) {
     return (
       <main className="container mx-auto px-4 py-12 text-[#ECECBB]">
         <div className="max-w-3xl mx-auto text-center">
           <div className="bg-green-500/20 border border-green-500 rounded-lg p-8">
             <FiCheck className="w-16 h-16 text-green-500 mx-auto mb-4" />
-            <h1 className="text-2xl font-bold mb-2">
-              Listing Created Successfully!
-            </h1>
+            <h1 className="text-2xl font-bold mb-2">Listing Updated!</h1>
             <p className="text-[#ECECBB]/70">Redirecting to your listing...</p>
           </div>
         </div>
@@ -198,11 +263,19 @@ const CreateListingPage = () => {
   return (
     <main className="container mx-auto px-4 sm:px-6 lg:px-8 py-12 text-[#ECECBB]">
       <div className="max-w-3xl mx-auto">
+        {/* Back Link */}
+        <Link
+          href={`/products/${productId}`}
+          className="inline-flex items-center gap-2 text-sm mb-6 text-[#239BA7] hover:underline"
+        >
+          <FiArrowLeft /> Back to Listing
+        </Link>
+
         {/* Page Heading */}
         <div className="text-center mb-10">
-          <h1 className="text-4xl font-bold">Create a New Listing</h1>
+          <h1 className="text-4xl font-bold">Edit Listing</h1>
           <p className="mt-2 text-md text-[#ECECBB]/70">
-            Fill out the details below to sell your hardware.
+            Update the details of your listing.
           </p>
         </div>
 
@@ -213,15 +286,70 @@ const CreateListingPage = () => {
           </div>
         )}
 
+        {/* Delete Confirmation Modal */}
+        {showDeleteConfirm && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-[#11211c] border border-[#30363D] rounded-lg p-6 max-w-md mx-4">
+              <h2 className="text-xl font-bold mb-4">Delete Listing?</h2>
+              <p className="text-gray-400 mb-6">
+                Are you sure you want to delete this listing? This action cannot
+                be undone.
+              </p>
+              <div className="flex gap-4">
+                <button
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="flex-1 py-2 border border-[#30363D] rounded-lg hover:bg-white/5"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDelete}
+                  disabled={isDeleting}
+                  className="flex-1 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+                >
+                  {isDeleting ? "Deleting..." : "Delete"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-8">
+          {/* Status Card */}
+          <div className="bg-black/20 border border-[#30363D] p-6 rounded-lg">
+            <h2 className="text-lg font-bold border-b border-[#30363D] pb-4 mb-6">
+              Listing Status
+            </h2>
+            <div className="flex flex-wrap gap-3">
+              {["available", "sold", "reserved"].map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setStatus(s)}
+                  className={`px-4 py-2 rounded-lg border transition-colors ${
+                    status === s
+                      ? s === "available"
+                        ? "bg-green-500/20 border-green-500 text-green-400"
+                        : s === "sold"
+                        ? "bg-red-500/20 border-red-500 text-red-400"
+                        : "bg-yellow-500/20 border-yellow-500 text-yellow-400"
+                      : "border-[#30363D] text-[#ECECBB]/70 hover:border-[#ECECBB]/50"
+                  }`}
+                >
+                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Product Details Card */}
           <div className="bg-black/20 border border-[#30363D] p-6 rounded-lg">
             <h2 className="text-lg font-bold border-b border-[#30363D] pb-4 mb-6">
               Product Details
             </h2>
             <div className="space-y-6">
-              {/* Product Name Input */}
+              {/* Product Name */}
               <div>
                 <label
                   htmlFor="product-name"
@@ -235,7 +363,6 @@ const CreateListingPage = () => {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="w-full bg-black/30 border border-[#30363D] rounded-md px-3 py-2 focus:ring-2 focus:ring-[#239BA7] focus:border-[#239BA7] outline-none placeholder:text-[#ECECBB]/40"
-                  placeholder="e.g., NVIDIA GeForce RTX 3080"
                   maxLength={100}
                 />
               </div>
@@ -256,7 +383,7 @@ const CreateListingPage = () => {
                       setCategory(e.target.value);
                       setSubcategory("");
                     }}
-                    className="w-full appearance-none rounded-lg border border-[#7ADAA5]/30 bg-[#7ADAA5]/10 px-3 py-2 backdrop-blur-sm outline-none focus:border-[#7ADAA5] focus:ring-2 focus:ring-[#7ADAA5]"
+                    className="w-full appearance-none rounded-lg border border-[#7ADAA5]/30 bg-[#7ADAA5]/10 px-3 py-2 outline-none focus:border-[#7ADAA5] focus:ring-2 focus:ring-[#7ADAA5]"
                   >
                     <option value="" className="bg-[#0D1117]">
                       Select a category
@@ -284,7 +411,7 @@ const CreateListingPage = () => {
                     value={subcategory}
                     onChange={(e) => setSubcategory(e.target.value)}
                     disabled={!category}
-                    className="w-full appearance-none rounded-lg border border-[#7ADAA5]/30 bg-[#7ADAA5]/10 px-3 py-2 backdrop-blur-sm outline-none focus:border-[#7ADAA5] focus:ring-2 focus:ring-[#7ADAA5] disabled:opacity-50"
+                    className="w-full appearance-none rounded-lg border border-[#7ADAA5]/30 bg-[#7ADAA5]/10 px-3 py-2 outline-none focus:border-[#7ADAA5] focus:ring-2 focus:ring-[#7ADAA5] disabled:opacity-50"
                   >
                     <option value="" className="bg-[#0D1117]">
                       Select a subcategory
@@ -307,18 +434,15 @@ const CreateListingPage = () => {
                   >
                     Price <span className="text-red-400">*</span>
                   </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      id="price"
-                      value={price}
-                      onChange={(e) => setPrice(e.target.value)}
-                      min="0"
-                      step="0.01"
-                      className="w-full bg-black/30 border border-[#30363D] rounded-md px-3 py-2 focus:ring-2 focus:ring-[#239BA7] focus:border-[#239BA7] outline-none placeholder:text-[#ECECBB]/40"
-                      placeholder="0.00"
-                    />
-                  </div>
+                  <input
+                    type="number"
+                    id="price"
+                    value={price}
+                    onChange={(e) => setPrice(e.target.value)}
+                    min="0"
+                    step="0.01"
+                    className="w-full bg-black/30 border border-[#30363D] rounded-md px-3 py-2 focus:ring-2 focus:ring-[#239BA7] outline-none"
+                  />
                 </div>
                 <div>
                   <label
@@ -381,7 +505,7 @@ const CreateListingPage = () => {
                     onChange={(e) => setYearsUsed(e.target.value)}
                     min="0"
                     max="50"
-                    className="w-full bg-black/30 border border-[#30363D] rounded-md px-3 py-2 focus:ring-2 focus:ring-[#239BA7] focus:border-[#239BA7] outline-none"
+                    className="w-full bg-black/30 border border-[#30363D] rounded-md px-3 py-2 focus:ring-2 focus:ring-[#239BA7] outline-none"
                   />
                 </div>
               </div>
@@ -413,8 +537,7 @@ const CreateListingPage = () => {
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   rows={4}
-                  className="w-full bg-black/30 border border-[#30363D] rounded-md px-3 py-2 focus:ring-2 focus:ring-[#239BA7] focus:border-[#239BA7] outline-none placeholder:text-[#ECECBB]/40"
-                  placeholder="Describe the condition, features, and any other relevant details about the product."
+                  className="w-full bg-black/30 border border-[#30363D] rounded-md px-3 py-2 focus:ring-2 focus:ring-[#239BA7] outline-none"
                   maxLength={1000}
                 />
                 <p className="text-xs text-[#ECECBB]/50 mt-1">
@@ -435,8 +558,7 @@ const CreateListingPage = () => {
                   value={specifications}
                   onChange={(e) => setSpecifications(e.target.value)}
                   rows={3}
-                  className="w-full bg-black/30 border border-[#30363D] rounded-md px-3 py-2 focus:ring-2 focus:ring-[#239BA7] focus:border-[#239BA7] outline-none placeholder:text-[#ECECBB]/40"
-                  placeholder="List technical specifications, model numbers, etc."
+                  className="w-full bg-black/30 border border-[#30363D] rounded-md px-3 py-2 focus:ring-2 focus:ring-[#239BA7] outline-none"
                   maxLength={1000}
                 />
               </div>
@@ -461,8 +583,7 @@ const CreateListingPage = () => {
                   id="city"
                   value={city}
                   onChange={(e) => setCity(e.target.value)}
-                  className="w-full bg-black/30 border border-[#30363D] rounded-md px-3 py-2 focus:ring-2 focus:ring-[#239BA7] focus:border-[#239BA7] outline-none placeholder:text-[#ECECBB]/40"
-                  placeholder="e.g., Dhaka"
+                  className="w-full bg-black/30 border border-[#30363D] rounded-md px-3 py-2 focus:ring-2 focus:ring-[#239BA7] outline-none"
                 />
               </div>
               <div>
@@ -477,8 +598,7 @@ const CreateListingPage = () => {
                   id="country"
                   value={country}
                   onChange={(e) => setCountry(e.target.value)}
-                  className="w-full bg-black/30 border border-[#30363D] rounded-md px-3 py-2 focus:ring-2 focus:ring-[#239BA7] focus:border-[#239BA7] outline-none placeholder:text-[#ECECBB]/40"
-                  placeholder="e.g., Bangladesh"
+                  className="w-full bg-black/30 border border-[#30363D] rounded-md px-3 py-2 focus:ring-2 focus:ring-[#239BA7] outline-none"
                 />
               </div>
             </div>
@@ -509,13 +629,12 @@ const CreateListingPage = () => {
             </div>
           </div>
 
-          {/* Photo Upload Card */}
+          {/* Photos Card */}
           <div className="bg-black/20 border border-[#30363D] p-6 rounded-lg">
             <h2 className="text-lg font-bold border-b border-[#30363D] pb-4 mb-6">
               Photos <span className="text-red-400">*</span>
             </h2>
 
-            {/* Image URL Input */}
             <div className="mb-4">
               <label className="block text-sm font-medium mb-2">
                 Add Image URL
@@ -525,25 +644,21 @@ const CreateListingPage = () => {
                   type="url"
                   value={imageUrl}
                   onChange={(e) => setImageUrl(e.target.value)}
-                  className="flex-1 bg-black/30 border border-[#30363D] rounded-md px-3 py-2 focus:ring-2 focus:ring-[#239BA7] focus:border-[#239BA7] outline-none placeholder:text-[#ECECBB]/40"
+                  className="flex-1 bg-black/30 border border-[#30363D] rounded-md px-3 py-2 focus:ring-2 focus:ring-[#239BA7] outline-none"
                   placeholder="https://example.com/image.jpg"
                 />
                 <button
                   type="button"
                   onClick={handleAddImage}
-                  className="px-4 py-2 bg-[#239BA7] text-white rounded-md hover:bg-[#239BA7]/80 transition-colors"
+                  className="px-4 py-2 bg-[#239BA7] text-white rounded-md hover:bg-[#239BA7]/80"
                 >
                   Add
                 </button>
               </div>
-              <p className="text-xs text-[#ECECBB]/50 mt-1">
-                Paste direct image URLs. You can add multiple images.
-              </p>
             </div>
 
-            {/* Image Preview Grid */}
-            {images.length > 0 ? (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 mb-4">
+            {images.length > 0 && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
                 {images.map((img, index) => (
                   <div key={index} className="relative group">
                     <div className="aspect-square bg-[#1e293b] rounded-lg overflow-hidden">
@@ -572,41 +687,38 @@ const CreateListingPage = () => {
                   </div>
                 ))}
               </div>
-            ) : (
-              <div className="border-2 border-dashed border-[#30363D] rounded-lg p-8 text-center">
-                <div className="flex justify-center mb-4">
-                  <FiUploadCloud className="w-12 h-12 text-[#E1AA36]" />
-                </div>
-                <h3 className="mb-2 font-semibold">No images added yet</h3>
-                <p className="text-xs text-[#ECECBB]/60">
-                  Add image URLs above to show your product from different
-                  angles.
-                </p>
-              </div>
             )}
           </div>
 
-          {/* Form Submission Button */}
-          <div className="flex justify-end gap-4 pt-4">
+          {/* Form Buttons */}
+          <div className="flex flex-col sm:flex-row justify-between gap-4 pt-4">
             <button
               type="button"
-              onClick={() => router.back()}
-              className="px-8 py-3 border border-[#30363D] text-[#ECECBB] font-bold rounded-lg hover:bg-white/5 transition-all"
+              onClick={() => setShowDeleteConfirm(true)}
+              className="px-8 py-3 border border-red-500/50 text-red-400 font-bold rounded-lg hover:bg-red-500/10 transition-all flex items-center justify-center gap-2"
             >
-              Cancel
+              <FiTrash2 /> Delete Listing
             </button>
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="px-8 py-3 bg-[#7ADAA5] text-black font-bold rounded-lg hover:bg-[#7ADAA5]/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isSubmitting ? "Creating..." : "Create Listing"}
-            </button>
+
+            <div className="flex gap-4">
+              <button
+                type="button"
+                onClick={() => router.back()}
+                className="px-8 py-3 border border-[#30363D] text-[#ECECBB] font-bold rounded-lg hover:bg-white/5 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="px-8 py-3 bg-[#7ADAA5] text-black font-bold rounded-lg hover:bg-[#7ADAA5]/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isSubmitting ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
           </div>
         </form>
       </div>
     </main>
   );
-};
-
-export default CreateListingPage;
+}

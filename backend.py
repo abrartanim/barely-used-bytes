@@ -2,6 +2,7 @@ import datetime
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, status, Response, Depends, Header
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, EmailStr
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
@@ -13,6 +14,15 @@ app = FastAPI(
     title = "Barely Used Bytes",
     description= "Backend api for managing used hardware parts listings.",
     version = "0.1.0",
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"],  # Next.js dev server
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
